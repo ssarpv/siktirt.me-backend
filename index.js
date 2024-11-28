@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const {Pool} = require('pg');
+const { Pool } = require('pg');
 
 const app = express();
 const pool = new Pool({
@@ -10,22 +10,23 @@ const pool = new Pool({
     database: process.env.DB_NAME,
 });
 
-const shortCodes = ['\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{200E}', '\u{200F}'];
+const zeroWidthCodes = ['\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{200E}', '\u{200F}'];
+const shortCodes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 app.use('/', express.static('dist'));
 
-function randomize() {
-    let shortUrl = '';
-    for (let i = 0; i < 16; i++) {
-        shortUrl += shortCodes[Math.floor(Math.random() * shortCodes.length)];
+function randomize(arr, len) {
+    let random = '';
+    for (let i = 0; i < len; i++) {
+        random += arr[Math.floor(Math.random() * arr.length)];
     }
-    return shortUrl;
+    return random;
 }
 
 
-function checkShortUrl(shortUrl) {
+function checkShortUrl({ shortUrl }) {
     return new Promise((resolve, reject) => {
-        const query = 'SELECT 1 FROM urls WHERE short_url = $1 LIMIT 1';
+        const query = 'SELECT * FROM urls WHERE short_url=$1 OR zero_width_url=$1 LIMIT 1;';
 
         pool.query(query, [shortUrl], (error, results) => {
             if (error) {
@@ -37,13 +38,14 @@ function checkShortUrl(shortUrl) {
 }
 
 async function generateShortUrl() {
-    let shortUrl = randomize();
-    let exists = true;
-    while (exists) {
-        shortUrl = randomize();
-        exists = await checkShortUrl(shortUrl);
+    let urls = [{ type: "short", urlLength: 8, url: "", exists: true }, { type: "zeroWidth", urlLength: 16, url: "", exists: true }]
+    for (const urlElement of urls) {
+        while (urlElement.exists) {
+            urlElement.url = randomize(shortCodes, urlElement.urlLength);
+            urlElement.exists = await checkShortUrl(urlElement.url);
+        }
     }
-    return shortUrl;
+    return urls;
 }
 
 app.use(express.json());
@@ -51,8 +53,8 @@ app.use(express.json());
 app.get('/:short', async (req, res) => {
     try {
         const shortUrl = encodeURIComponent(req.params.short);
-        const query = 'SELECT * FROM urls WHERE short_url = $1';
-        const {rows} = await pool.query(query, [shortUrl]);
+        const query = 'SELECT * FROM urls WHERE short_url=$1 OR zero_width_url=$1 LIMIT 1;';
+        const { rows } = await pool.query(query, [shortUrl]);
         if (rows.length > 0) {
             res.redirect(301, rows[0].long_url);
         } else {
@@ -65,27 +67,34 @@ app.get('/:short', async (req, res) => {
 });
 
 app.post('/short', async (req, res) => {
-    if(!req.body.url.match(/https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/g)){
-        res.status(400).send('Geçersiz URL');
+    if (!req.body.url.match(/https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/g)) {
+        return res.status(400).send('Geçersiz URL');
     }
     try {
-        const checkQuery = 'SELECT * FROM urls WHERE long_url = $1';
-        const {rows: existingRows} = await pool.query(checkQuery, [req.body.url]);
+        const checkQuery = 'SELECT * FROM urls WHERE long_url=$1 LIMIT 1;';
+        const { rows: existingRows } = await pool.query(checkQuery, [req.body.url]);
         if (existingRows.length > 0) {
-            res.send(JSON.stringify({
-                shortUrl: `${decodeURIComponent(existingRows[0].short_url)}`
+            console.log(existingRows);
+            return res.send(JSON.stringify({
+                shortUrl: `${decodeURIComponent(existingRows[0].short_url)}`,
+                zeroWidthUrl: `${decodeURIComponent(existingRows[0].zero_width_url)}`
             }));
         } else {
-            const shortUrl = encodeURIComponent(await generateShortUrl());
-            const insertQuery = 'INSERT INTO urls (long_url, short_url) VALUES ($1, $2) RETURNING short_url';
-            const {rows: newRows} = await pool.query(insertQuery, [req.body.url, shortUrl]);
-            res.json({
+            const urls = await generateShortUrl();
+            console.log(urls)
+            const shortUrl = encodeURIComponent(urls[0].url);
+            const zeroWidthUrl = encodeURIComponent(urls[1].url);
+            const insertQuery = 'INSERT INTO urls (long_url, short_url, zero_width_url) VALUES ($1, $2, $3) RETURNING short_url, zero_width_url';
+            const { rows: newRows } = await pool.query(insertQuery, [req.body.url, shortUrl, zeroWidthUrl]);
+            console.log(newRows);
+            return res.json({
                 shortUrl: `${decodeURIComponent(newRows[0].short_url)}`,
+                zeroWidthUrl: `${decodeURIComponent(newRows[0].zero_width_url)}`
             });
         }
     } catch (e) {
         console.error("Error: ", e);
-        res.status(500).send('Sunucu hatası.');
+        return res.status(500).send('Sunucu hatası.');
     }
 })
 
