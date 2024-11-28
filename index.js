@@ -10,9 +10,6 @@ const pool = new Pool({
     database: process.env.DB_NAME,
 });
 
-const zeroWidthCodes = ['\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{200E}', '\u{200F}'];
-const shortCodes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
 app.use('/', express.static('dist'));
 
 function randomize(arr, len) {
@@ -38,10 +35,10 @@ function checkShortUrl({ shortUrl }) {
 }
 
 async function generateShortUrl() {
-    let urls = [{ type: "short", urlLength: 8, url: "", exists: true }, { type: "zeroWidth", urlLength: 16, url: "", exists: true }]
+    let urls = [{ type: "short", urlLength: 8, url: "", exists: true, codes: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"}, { type: "zeroWidth", urlLength: 16, url: "", exists: true, codes: ['\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{200E}', '\u{200F}']}]
     for (const urlElement of urls) {
         while (urlElement.exists) {
-            urlElement.url = randomize(shortCodes, urlElement.urlLength);
+            urlElement.url = randomize(urlElement.codes, urlElement.urlLength);
             urlElement.exists = await checkShortUrl(urlElement.url);
         }
     }
